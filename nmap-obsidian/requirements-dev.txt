@@ -1,2 +1,0 @@
-pytest>=7
-defusedxml>=0.7

@@ -36,8 +36,7 @@ Single file, standard library only, Python 3.9+.
 ## Install
 
 ```bash
-git clone https://github.com/<you>/<repo>.git
-cd <repo>
+cd nmap-obsidian
 pip install defusedxml   # optional, recommended for scan files you did not make yourself
 python converter.py -h
 ```
@@ -191,13 +190,6 @@ keep it that way.
 - [Nmap-and-Chill](https://github.com/shhimnothere/Nmap-and-Chill): runs Nmap scans and writes
   reports and Obsidian notes.
 
-## Tests
-
-```bash
-pip install pytest defusedxml
-pytest -q
-```
-
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT.
