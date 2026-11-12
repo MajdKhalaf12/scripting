@@ -17,7 +17,7 @@ Install dependencies per project (see each folder’s README).
 
 | Directory | Description |
 |-----------|-------------|
-| [network-scanning/](network-scanning/) | Network discovery: ICMP ping sweeps, TCP SYN port scans (Scapy), Nmap service fingerprinting, HTTP banner grabs, and a full-scan wrapper |
+| [nmap-obsidian/](nmap-obsidian/) | Convert Nmap XML scans into an incremental Obsidian vault: per-host notes, network graph, asset roles |
 
 ## Legal use
 

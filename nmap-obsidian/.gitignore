@@ -1,0 +1,19 @@
+# Vaults and scans hold client data: never commit them
+Nmap_Nodes/
+*.remaining.txt
+*.part2.xml
+/*.xml
+/*.gnmap
+/*.nmap
+scans/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Obsidian
+.obsidian/
+.DS_Store
