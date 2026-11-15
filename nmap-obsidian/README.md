@@ -8,6 +8,10 @@ the same ranges many times and want one place that keeps track of everything.
 python converter.py 10.10.10.0.xml 192.168.13.0.xml
 ```
 
+![Obsidian graph view of a converted scan, colored by OS](graph.png)
+
+![The same graph zoomed in: hosts, subnets, ports and tags labeled](graph-labels.png)
+
 > **Status: alpha.** Works well on the scans it was built with, but it still needs testing on
 > more real networks. Issues with a scrubbed XML sample are very welcome.
 
@@ -29,7 +33,8 @@ Other tools turn a scan into tables or a single report. This one keeps a **livin
 - **Web stack.** Server, language, framework and CMS from headers and cookies
   (`nginx 1.18.0, PHP 7.4.3, Laravel`), each with its proof. Devices show what they are instead.
 - **Real world scans.** Unfinished scans (still running or stopped) are imported as far as they
-  got, with the list of targets left. `-Pn` targets that never answered do not become fake hosts.
+  got, with the list of targets left. `-Pn` targets that never answered do not become fake hosts, and each
+  host note says why it counts as alive (open port, MAC, OS fingerprint, or only a reset).
 
 Single file, standard library only, Python 3.9+.
 
@@ -145,7 +150,7 @@ Port links (`[[Port 445]]`) connect every host with that port. Turn them off wit
 | `-P` | no `[[Port N]]` hub nodes |
 | `-v` | print every role, finding and change |
 | `-n` | no colors |
-| `--prune-ghosts` | delete notes of hosts with no sign they exist (made by `-Pn` scans with older versions); notes you wrote in are kept |
+| `--prune-ghosts [RANGE]` | delete empty notes (no open port ever, no MAC, no OS, no script output), including hosts that only answered a ping or a reset; notes you wrote in are kept. Optional range limits it: `10.10.10.0/24`, `10.10.10.1-50`, or several with commas. No scan file needed |
 
 ## Safe to edit
 
@@ -179,16 +184,6 @@ Findings live in `script_findings()`, web technologies in `WEB_TECH`.
 
 A vault holds client data. The `.gitignore` here keeps `Nmap_Nodes/` and scan files out of git;
 keep it that way.
-
-## Similar tools
-
-- [nmap-formatter](https://github.com/vdjagilev/nmap-formatter): converts a scan to HTML, CSV,
-  Markdown, JSON, Graphviz and more.
-- [Nmap2Table](https://github.com/0xMR007/Nmap2Table): scan results as Markdown tables.
-- [nmap-plugin](https://github.com/Yasha-ops/nmap-plugin): Obsidian plugin that imports a scan
-  into notes and a canvas.
-- [Nmap-and-Chill](https://github.com/shhimnothere/Nmap-and-Chill): runs Nmap scans and writes
-  reports and Obsidian notes.
 
 ## License
 

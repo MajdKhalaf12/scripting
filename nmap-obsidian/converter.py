@@ -76,7 +76,7 @@ def say(kind, target, mark, msg):
 
 # ========================================================== sanitizing ====
 
-_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069]")
+_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f​-‏ -‮⁦-⁩]")
 _MD = re.compile(r"[|`\[\]<{}\\]")  # "<" starts HTML; ">" alone is harmless mid-line
 PORT_RE = re.compile(r"[0-9]{1,5}/[a-z0-9]{2,8}")
 MAC_RE = re.compile(r"[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}")
@@ -317,7 +317,8 @@ def blank_record(ip):
             "names": [], "domain": "", "os": "", "os_src": "", "os_acc": 0, "os_str": 0,
             "os_seen": "", "build": "", "devtypes": [], "status": "up", "down_since": "",
             "first_seen": "", "last_seen": "", "paths": [], "ports": {},
-            "hostscripts": {}, "scans": [], "changes": [], "pending": False, "alive": ""}
+            "hostscripts": {}, "scans": [], "changes": [], "pending": False, "alive": "",
+            "alive_by": ""}
 
 
 def blank_port():
@@ -392,6 +393,7 @@ def normalize_record(d, ip):
                   for s in _list(d.get("scans")) if isinstance(s, dict)][-20:]
     r["pending"] = d.get("pending") is True
     r["alive"] = "yes" if d.get("alive") == "yes" else ""
+    r["alive_by"] = clean(d.get("alive_by"), 160)
     r["changes"] = [{"at": valid_ts(c.get("at")), "text": clean(c.get("text"), 240)}
                     for c in _list(d.get("changes")) if isinstance(c, dict)][-100:]
     return r
@@ -541,6 +543,7 @@ def parse_host(host, meta):
         key = f"{int(pid)}/{proto}"
         if pstate in ("open", "closed", "unfiltered"):
             ob["responded"] = True  # an answer (SYN/ACK or RST) came back from this IP
+            ob.setdefault("first_open" if pstate == "open" else "first_other", f"{key} {pstate}")
         if pstate == "closed":
             ob["closed"].append(key)
             continue
@@ -583,6 +586,24 @@ def parse_host(host, meta):
     # or unfiltered port, a MAC (ARP answered), an OS match or host script output.
     ob["evidence"] = bool(reason != "user-set" or ob.get("responded") or mac
                           or host.find("os/osmatch") is not None or ob["hostscripts"])
+    # what made it count as alive, shown in the note so you can judge it
+    if ob.get("first_open"):
+        ob["alive_by"] = f"open port {ob['first_open'].split()[0]}"
+    elif mac:
+        ob["alive_by"] = "MAC address (answered ARP)"
+    elif host.find("os/osmatch") is not None:
+        ob["alive_by"] = "OS fingerprint"
+    elif ob["hostscripts"]:
+        ob["alive_by"] = "host script output"
+    elif ob.get("first_other"):
+        ob["alive_by"] = (f"only {ob['first_other'].replace('closed', 'closed (TCP reset)')}: a firewall "
+                          "answering for every IP looks the same")
+    elif reason and reason != "user-set":
+        weak = reason in ("reset", "conn-refused")
+        ob["alive_by"] = f"discovery reply ({clean(reason, 30)})" + (
+            ": a firewall answering for every IP looks the same" if weak else "")
+    else:
+        ob["alive_by"] = ""
     if not ob["evidence"]:
         return {"state": "silent", "ip": ip, "seen": seen, "file": meta["file"]}
     return ob
@@ -1458,6 +1479,16 @@ def pick_gateway(paths):
     return last if last != "*" else ""
 
 
+def alive_rank(why):
+    if not why:
+        return 0
+    if why.startswith(("open port", "MAC")):
+        return 3
+    if why.startswith(("OS", "host script")) or (why.startswith("discovery") and "firewall" not in why):
+        return 2
+    return 1
+
+
 def merge(rec, ob, events):
     """Newest scan wins when it has the data. Empty never overwrites. Changes are logged."""
     ip, at = rec["ip"], ob["seen"]
@@ -1484,6 +1515,9 @@ def merge(rec, ob, events):
         rec["scans"] = sorted(rec["scans"] + [scan], key=lambda s: s["at"])[-20:]
 
     rec["alive"] = "yes"
+    # keep the strongest reason seen: an open port beats a reset; ties keep the first
+    if ob.get("alive_by") and alive_rank(ob["alive_by"]) > alive_rank(rec["alive_by"]):
+        rec["alive_by"] = ob["alive_by"]
     if ob.get("hint"):
         rec["pending"] = not rec["ports"]
     else:
@@ -1657,6 +1691,8 @@ def render_note(rec, extra, link_ports):
     for v6 in rec["ipv6"]:
         L.append(f"- **IPv6:** `{v6}`")
     status = "down since " + short(rec["down_since"]) if rec["status"] == "down" else "up"
+    if rec["alive_by"] and rec["status"] == "up":
+        status += f" _(alive because: {rec['alive_by']})_"
     L.append(f"- **Status:** {status}")
     L.append(f"- **First seen:** {short(rec['first_seen'])} · **Last seen:** {short(rec['last_seen'])}")
     if rec["scans"]:
@@ -2580,8 +2616,11 @@ def print_help():
     opt("-P, --no-port-links", "write ports as plain text, no [[Port N]] hub nodes in the graph")
     opt("-v, --verbose", f"print every role, finding and change (default: first {EVENT_LIMIT} per scan)")
     opt("-n, --no-color", "plain output (automatic when piped or NO_COLOR is set)")
-    opt("--prune-ghosts", "delete notes of hosts with no sign they exist (made by -Pn scans")
-    print(f"  {'':<22} with older versions); notes you wrote in are never deleted")
+    opt("--prune-ghosts", "delete notes with nothing in them: no open port ever, no MAC, no OS,")
+    print(f"  {'':<22} no script output. Notes you wrote in are never deleted. Hosts that only")
+    print(f"  {'':<22} answered a ping or a reset are deleted too. Add a range to limit it:")
+    print(f"  {'':<22} --prune-ghosts 10.10.10.0/24 (or 10.10.10.1-50, or several with commas).")
+    print(f"  {'':<22} No scan file needed.")
     opt("-h, --help", "show this help")
     print()
     head("EXAMPLES")
@@ -2690,7 +2729,7 @@ def print_help():
 
 def parse_args(argv):
     opts = {"output": DEFAULT_OUT, "port_links": True, "verbose": False, "color": True, "prune": False,
-            "help": False, "files": []}
+            "scope": None, "scope_text": "", "help": False, "files": []}
     args = []
     for a in argv:
         if a.startswith("-") and not a.startswith("--") and len(a) > 2:
@@ -2713,8 +2752,17 @@ def parse_args(argv):
             opts["port_links"] = False
         elif a in ("-v", "--verbose"):
             opts["verbose"] = True
-        elif a == "--prune-ghosts":
+        elif a == "--prune-ghosts" or a.startswith("--prune-ghosts="):
             opts["prune"] = True
+            value = a.split("=", 1)[1] if "=" in a else ""
+            nxt = args[i + 1] if i + 1 < len(args) else ""
+            if not value and RANGE_LIKE.fullmatch(nxt):  # optional range right after the flag
+                value, i = nxt, i + 1
+            if value:
+                scope = parse_scope(value)
+                if scope is None:
+                    return opts, f"not a valid range for --prune-ghosts: {value}"
+                opts["scope"], opts["scope_text"] = scope, value
         elif a in ("-n", "--no-color"):
             opts["color"] = False
         elif a.startswith("-"):
@@ -2725,26 +2773,76 @@ def parse_args(argv):
     return opts, None
 
 
+RANGE_LIKE = re.compile(r"[0-9][0-9.,/*-]*")
+
+
+def parse_scope(text):
+    """'10.10.10.0/24', '10.10.10.1-50', '10.0.0.0/8,192.168.1.0/24' -> list of matchers."""
+    parts = []
+    try:
+        single = expand_spec(text)  # nmap style, commas inside octets (10.0.0.1,3,5)
+    except _TooMany:
+        single = None
+    if single is not None and "/" not in text:
+        return [set(single)]
+    for chunk in text.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            parts.append(ipaddress.IPv4Network(chunk, strict=False))
+            continue
+        except ValueError:
+            pass
+        try:
+            ips = expand_spec(chunk)
+        except _TooMany:
+            return None
+        if ips is None:
+            return None
+        parts.append(set(ips))
+    return parts or None
+
+
+def in_scope(ip, scope):
+    if scope is None:
+        return True
+    addr, key = ipaddress.IPv4Address(ip), ip_key(ip)
+    return any(key in m if isinstance(m, set) else addr in m for m in scope)
+
+
 def is_ghost(entry):
-    """A note with nothing showing the host exists, and nothing written by you."""
+    """Nothing worth keeping: no open port ever, no MAC, no OS, no scripts, nothing you wrote.
+    How it once answered does not matter: a reset from a firewall or a lone ping reply
+    leaves a note with nothing in it."""
     r = entry["rec"]
-    return (r["alive"] != "yes" and not r["ports"] and not r["mac"] and not r["os"]
+    return (not r["ports"] and not r["mac"] and not r["os"]
             and not r["hostscripts"] and not r["pending"]
             and entry["extra"].strip() == "## Notes")
 
 
-def handle_ghosts(out, hosts, cache, prune):
+def handle_ghosts(out, hosts, cache, prune, scope=None, scope_text=""):
     ghosts = []
     for ip in list(hosts):
         e = get_entry(ip, hosts, cache)
         if e and is_ghost(e):
             ghosts.append(ip)
     if not ghosts:
+        if prune:
+            say("VAULT", out, "*", "no empty notes" + (f" in {scope_text}" if scope_text else "") + ", nothing deleted")
         return
     ghosts.sort(key=ip_key)
+    if prune and scope is not None:
+        outside = [ip for ip in ghosts if not in_scope(ip, scope)]
+        ghosts = [ip for ip in ghosts if in_scope(ip, scope)]
+        if outside:
+            say("VAULT", out, "*", f"{len(outside)} empty notes outside {scope_text} left alone")
+        if not ghosts:
+            say("VAULT", out, "*", f"no empty notes in {scope_text}, nothing deleted")
+            return
     if not prune:
-        say("VAULT", out, "!", f"{len(ghosts)} notes have no sign the host exists (no port answered, "
-            "no MAC, no OS), likely from a -Pn scan: run with --prune-ghosts to delete them")
+        say("VAULT", out, "!", f"{len(ghosts)} notes have nothing in them (no open port ever, no MAC, "
+            "no OS, no script output): run with --prune-ghosts to delete them")
         return
     for ip in ghosts:
         for path in (hosts[ip], data_path(ip)):
@@ -2755,7 +2853,8 @@ def handle_ghosts(out, hosts, cache, prune):
         hosts.pop(ip, None)
         cache.pop(ip, None)
     shown = ", ".join(ghosts[:10]) + (f" +{len(ghosts) - 10} more" if len(ghosts) > 10 else "")
-    say("VAULT", out, "+", f"deleted {len(ghosts)} ghost notes: {shown}")
+    where = f" in {scope_text}" if scope_text else ""
+    say("VAULT", out, "+", f"deleted {len(ghosts)} empty notes{where}: {shown}")
 
 
 def prune_orphans(hosts):
@@ -2791,7 +2890,7 @@ def main(argv):
     if err:
         say("ERROR", "", "-", f"{err} (see python converter.py -h)")
         return 2
-    if not opts["files"]:
+    if not opts["files"] and not opts["prune"]:
         say("ERROR", "", "-", "no scan files given (see python converter.py -h)")
         return 2
 
@@ -2818,7 +2917,7 @@ def main(argv):
     for meta in metas:
         entries.append(process(meta, out, hosts, segments, cache, opts))
 
-    handle_ghosts(out, hosts, cache, opts["prune"])
+    handle_ghosts(out, hosts, cache, opts["prune"], opts["scope"], opts["scope_text"])
     prune_orphans(hosts)
     log = write_scan_log(out, load_scan_log(out), [e for e in entries if e.get("start")])
     total = write_indexes(out, hosts, cache, log, opts["port_links"])
